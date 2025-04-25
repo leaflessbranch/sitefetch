@@ -132,6 +132,41 @@ The caching system:
 4. Includes size management to prevent unbounded growth
 5. Works seamlessly with all other features
 
+### Custom Request Configuration
+
+SiteFetch provides advanced HTTP request configuration options:
+
+```bash
+# Set custom user agent
+sitefetch https://example.com -o site.txt --user-agent "My Custom Bot (https://mybot.example)"
+
+# Include cookies with requests
+sitefetch https://example.com -o site.txt --cookies '{"session":"abc123","preference":"dark-mode"}'
+
+# Use a proxy server
+sitefetch https://example.com -o site.txt --proxy "http://user:pass@proxy.example.com:8080"
+
+# SSL/TLS configuration
+sitefetch https://example.com -o site.txt --no-verify-ssl --cert "./client.crt" --key "./client.key"
+
+# Control redirect behavior
+sitefetch https://example.com -o site.txt --no-follow-redirects
+sitefetch https://example.com -o site.txt --max-redirects 5
+
+# Set maximum response size
+sitefetch https://example.com -o site.txt --max-response-size 10485760  # 10MB limit
+```
+
+The request configuration system supports:
+
+1. Custom HTTP headers and User-Agent
+2. Cookie management with automatic handling of Set-Cookie headers
+3. Proxy server configuration
+4. SSL/TLS options including certificate verification control
+5. Fine-grained control over redirects
+6. Response size limits for security
+7. Automatic retry with exponential backoff
+
 ### Content Transformation
 
 Sitefetch can output content in various formats and with different processing options:

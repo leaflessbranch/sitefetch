@@ -137,6 +137,69 @@ cli
         extractMicrodata: flags.extractMicrodata === true
       }
     }
+    
+    // Parse request configuration options
+    let requestOptions = undefined
+    if (flags.timeout || 
+        flags.userAgent || 
+        flags.cookies || 
+        flags.proxy || 
+        flags.followRedirects === false || 
+        flags.maxRedirects || 
+        flags.maxResponseSize || 
+        flags.verifySsl === false || 
+        flags.cert || 
+        flags.key || 
+        flags.ca) {
+      requestOptions = {
+        timeout: flags.timeout && parseInt(flags.timeout, 10),
+        userAgent: flags.userAgent,
+        followRedirects: flags.followRedirects !== false,
+        maxRedirects: flags.maxRedirects && parseInt(flags.maxRedirects, 10),
+        maxResponseSize: flags.maxResponseSize && parseInt(flags.maxResponseSize, 10),
+        headers: {},
+        tls: {}
+      }
+
+      // Parse cookies if provided as JSON
+      if (flags.cookies) {
+        try {
+          requestOptions.cookies = JSON.parse(flags.cookies)
+        } catch (error) {
+          logger.warn(`Failed to parse cookies JSON: ${error.message}`)
+        }
+      }
+
+      // Add proxy if specified
+      if (flags.proxy) {
+        requestOptions.proxy = flags.proxy
+      }
+
+      // Add TLS/SSL options
+      if (flags.verifySsl === false) {
+        requestOptions.tls.rejectUnauthorized = false
+      }
+
+      if (flags.cert) {
+        requestOptions.tls.cert = flags.cert
+      }
+
+      if (flags.key) {
+        requestOptions.tls.key = flags.key
+      }
+
+      if (flags.ca) {
+        requestOptions.tls.ca = flags.ca
+      }
+
+      // Clean up empty objects
+      if (Object.keys(requestOptions.tls).length === 0) {
+        delete requestOptions.tls
+      }
+      if (Object.keys(requestOptions.headers).length === 0) {
+        delete requestOptions.headers
+      }
+    }
 
     const pages = await fetchSite(url, {
       concurrency: flags.concurrency,
@@ -159,6 +222,7 @@ cli
       },
       cache: cacheOptions,
       metadata: metadataOptions,
+      request: requestOptions,
     })
 
     if (pages.size === 0) {

@@ -107,6 +107,19 @@ export class TransformError extends SiteFetchError {
 }
 
 /**
+ * Error thrown when a proxy connection fails
+ */
+export class ProxyError extends SiteFetchError {
+  constructor(public url: string, public proxy: string, message?: string) {
+    super(
+      message || `Proxy connection failed for ${url} using ${proxy}`,
+      ErrorCode.PROXY_ERROR
+    )
+    this.name = 'ProxyError'
+  }
+}
+
+/**
  * Options for retry functionality
  */
 export interface RetryOptions {

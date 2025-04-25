@@ -12,7 +12,8 @@ import { RobotsParser } from './robots-parser'
 import { ContentFilter } from '../filters'
 import { Cache } from '../cache'
 import { MetadataExtractor } from '../metadata'
-import { fetchWithRetry, handleError, TransformError } from '../errors'
+import { handleError, TransformError } from '../errors'
+import { RequestManager } from './request-manager'
 import { TransformerFactory, serializePages as transformSerializePages } from '../transforms'
 import type { Options, FetchSiteResult, Page, TransformOptions } from '../types'
 
@@ -28,6 +29,7 @@ export class Fetcher {
   #contentFilter: ContentFilter
   #cache: Cache
   #metadataExtractor: MetadataExtractor
+  #requestManager: RequestManager
   
   /**
    * Creates a new Fetcher instance
@@ -52,6 +54,9 @@ export class Fetcher {
     
     // Initialize metadata extractor
     this.#metadataExtractor = new MetadataExtractor(options.metadata)
+    
+    // Initialize request manager
+    this.#requestManager = new RequestManager(options.request)
   }
   
   /**
@@ -221,24 +226,19 @@ export class Fetcher {
       // Use rate limiter to schedule the fetch
       const res = await this.#rateLimiter.schedule(async () => {
         try {
-          const fetchFn = this.options.fetch || ((url, init) => fetchWithRetry(
-            url,
-            {
-              ...init,
-              timeout: this.options.request?.timeout,
-              headers: {
-                ...init?.headers,
-                'user-agent': this.options.request?.userAgent || 'Sitefetch (https://github.com/egoist/sitefetch)',
-                ...(this.options.request?.headers || {})
+          // Use custom fetch function if provided, otherwise use the request manager
+          if (this.options.fetch) {
+            return await this.options.fetch(url, {})
+          } else {
+            return await this.#requestManager.fetch(
+              url, 
+              {}, 
+              {
+                retries: this.options.errors?.retries,
+                retryDelay: this.options.errors?.retryDelay
               }
-            },
-            {
-              retries: this.options.errors?.retries,
-              retryDelay: this.options.errors?.retryDelay
-            }
-          ))
-          
-          return await fetchFn(url, {})
+            )
+          }
         } catch (error) {
           // Handle error but allow continuing if configured to do so
           return handleError(error, { 
@@ -532,6 +532,24 @@ export class Fetcher {
    */
   updateMetadataOptions(options: Partial<import('../types').MetadataOptions>): void {
     this.#metadataExtractor.updateOptions(options)
+  }
+  
+  /**
+   * Gets the request manager instance
+   * 
+   * @returns The request manager
+   */
+  getRequestManager(): RequestManager {
+    return this.#requestManager
+  }
+  
+  /**
+   * Updates request configuration options
+   * 
+   * @param options New request options
+   */
+  updateRequestOptions(options: Partial<import('../types').RequestOptions>): void {
+    this.#requestManager.updateOptions(options)
   }
   
   /**

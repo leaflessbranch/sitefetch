@@ -66,14 +66,7 @@ export type Options = {
   /**
    * Request configuration options
    */
-  request?: {
-    /** Timeout for requests in milliseconds */
-    timeout?: number
-    /** User agent string to use for requests */
-    userAgent?: string
-    /** Additional headers to send with requests */
-    headers?: Record<string, string>
-  }
+  request?: RequestOptions
 
   /**
    * Rate limiting options to control request frequency
@@ -310,6 +303,7 @@ export enum ErrorCode {
   PAGINATION_ERROR = 'PAGINATION_ERROR',
   TRANSFORM_ERROR = 'TRANSFORM_ERROR',
   METADATA_ERROR = 'METADATA_ERROR',
+  PROXY_ERROR = 'PROXY_ERROR',
   UNKNOWN_ERROR = 'UNKNOWN_ERROR'
 }
 
@@ -323,6 +317,41 @@ export enum CacheErrorCode {
   EXPIRED = 'CACHE_EXPIRED',
   NOT_FOUND = 'CACHE_NOT_FOUND',
   CORRUPTION = 'CACHE_CORRUPTION'
+}
+
+/**
+ * Custom HTTP request configuration options
+ */
+export interface RequestOptions {
+  /** Timeout for requests in milliseconds */
+  timeout?: number
+  /** User agent string to use for requests */
+  userAgent?: string
+  /** Additional headers to send with requests */
+  headers?: Record<string, string>
+  /** Cookies to include with requests */
+  cookies?: Record<string, string>
+  /** Proxy URL to use for requests (e.g., 'http://username:password@proxy.example.com:8080') */
+  proxy?: string
+  /** Whether to follow redirects (default: true) */
+  followRedirects?: boolean
+  /** Maximum number of redirects to follow (default: 20) */
+  maxRedirects?: number
+  /** Maximum response size in bytes (default: unlimited) */
+  maxResponseSize?: number
+  /** Whether to use HTTP/2 if available (default: false) */
+  useHttp2?: boolean
+  /** TLS/SSL configuration */
+  tls?: {
+    /** Whether to verify SSL certificates (default: true) */
+    rejectUnauthorized?: boolean
+    /** Path to a CA certificate file */
+    ca?: string
+    /** Path to a client certificate file */
+    cert?: string
+    /** Path to a client key file */
+    key?: string
+  }
 }
 
 /**

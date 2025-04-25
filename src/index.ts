@@ -5,6 +5,9 @@ export { fetchSite, serializePages, Fetcher } from './fetcher'
 export { RateLimiter } from './fetcher/rate-limiter'
 export { RobotsParser } from './fetcher/robots-parser'
 
+// Re-export request management classes
+export { RequestManager, createRequestManager } from './fetcher/request-manager'
+
 // Re-export content filtering classes
 export { ContentFilter, filterPages } from './filters'
 
@@ -26,7 +29,8 @@ export {
   RateLimitError,
   ValidationError,
   CacheError,
-  TransformError
+  TransformError,
+  ProxyError
 } from './errors'
 
 // Export metadata error classes
