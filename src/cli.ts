@@ -18,7 +18,35 @@ cli
   .option("-m, --match <pattern>", "Only fetch matched pages")
   .option("--content-selector <selector>", "The CSS selector to find content")
   .option("--limit <limit>", "Limit the result to this amount of pages")
+  .option("--rate-limit <number>", "Maximum requests per second (default: 5)")
+  .option("--min-delay <number>", "Minimum delay between requests in ms (default: 200)")
+  .option("--no-adaptive", "Disable adaptive rate limiting")
+  .option("--no-robots", "Ignore robots.txt crawl-delay directives")
+  .option("--host-limits <json>", "Custom rate limits for specific hosts (JSON string)")
+  .option("--format <format>", "Output format (markdown, text, html, json, xml, csv)")
+  .option("--pretty-print", "Pretty print the output")
+  .option("--no-excess-whitespace", "Remove excessive whitespace")
+  .option("--no-line-breaks", "Remove consecutive line breaks")
   .option("--silent", "Do not print any logs")
+  .option("--include-text <pattern>", "Only include pages containing specific text")
+  .option("--exclude-text <pattern>", "Exclude pages containing specific text")
+  .option("--min-content-length <number>", "Minimum content length in characters")
+  .option("--max-content-length <number>", "Maximum content length in characters")
+  .option("--date-from <date>", "Only include pages with date on or after (YYYY-MM-DD)")
+  .option("--date-to <date>", "Only include pages with date on or before (YYYY-MM-DD)")
+  .option("--cache", "Enable caching of fetched pages")
+  .option("--no-cache", "Disable caching of fetched pages")
+  .option("--cache-dir <path>", "Directory to store cache files")
+  .option("--cache-ttl <seconds>", "Time-to-live for cached pages in seconds (default: 3600)")
+  .option("--cache-namespace <name>", "Namespace for cache files")
+  .option("--extract-metadata", "Enable metadata extraction")
+  .option("--no-metadata-dates", "Disable extraction of publication dates")
+  .option("--no-metadata-authors", "Disable extraction of author information")
+  .option("--no-metadata-meta-tags", "Disable extraction of meta tags")
+  .option("--no-metadata-opengraph", "Disable extraction of OpenGraph metadata")
+  .option("--no-metadata-twitter", "Disable extraction of Twitter card metadata")
+  .option("--extract-json-ld", "Enable extraction of JSON-LD structured data")
+  .option("--extract-microdata", "Enable extraction of microdata from HTML attributes")
   .action(async (url, flags) => {
     if (!url) {
       cli.outputHelp()
@@ -29,11 +57,108 @@ cli
       logger.setLevel("silent")
     }
 
+    // Parse host limits if provided
+    let perHostLimits = undefined
+    if (flags.hostLimits) {
+      try {
+        perHostLimits = JSON.parse(flags.hostLimits)
+      } catch (error) {
+        logger.warn(`Failed to parse host limits: ${error.message}`)
+      }
+    }
+
+    // Parse filter options
+    let filterOptions = undefined
+    if (
+      flags.includeText ||
+      flags.excludeText ||
+      flags.minContentLength ||
+      flags.maxContentLength ||
+      flags.dateFrom ||
+      flags.dateTo
+    ) {
+      filterOptions = {
+        includeText: flags.includeText && ensureArray(flags.includeText),
+        excludeText: flags.excludeText && ensureArray(flags.excludeText),
+        minContentLength: flags.minContentLength && parseInt(flags.minContentLength, 10),
+        maxContentLength: flags.maxContentLength && parseInt(flags.maxContentLength, 10),
+      }
+      
+      // Parse date range if specified
+      if (flags.dateFrom || flags.dateTo) {
+        filterOptions.dateRange = {}
+        
+        if (flags.dateFrom) {
+          try {
+            filterOptions.dateRange.from = new Date(flags.dateFrom)
+          } catch (error) {
+            logger.warn(`Invalid date-from format: ${error.message}`)
+          }
+        }
+        
+        if (flags.dateTo) {
+          try {
+            filterOptions.dateRange.to = new Date(flags.dateTo)
+          } catch (error) {
+            logger.warn(`Invalid date-to format: ${error.message}`)
+          }
+        }
+      }
+    }
+
+    // Parse cache options
+    let cacheOptions = undefined
+    if (flags.cache !== undefined || flags.cacheDir || flags.cacheTtl || flags.cacheNamespace) {
+      cacheOptions = {
+        enabled: flags.cache !== false, // Default to true if any cache option is specified
+        directory: flags.cacheDir,
+        ttl: flags.cacheTtl && parseInt(flags.cacheTtl, 10),
+        namespace: flags.cacheNamespace
+      }
+    }
+    
+    // Parse metadata options
+    let metadataOptions = undefined
+    if (flags.extractMetadata || 
+        flags.metadataDates === false || 
+        flags.metadataAuthors === false || 
+        flags.metadataMetaTags === false || 
+        flags.metadataOpengraph === false || 
+        flags.metadataTwitter === false || 
+        flags.extractJsonLd || 
+        flags.extractMicrodata) {
+      metadataOptions = {
+        extractDates: flags.metadataDates !== false,
+        extractAuthors: flags.metadataAuthors !== false,
+        extractMetaTags: flags.metadataMetaTags !== false,
+        extractOpenGraph: flags.metadataOpengraph !== false,
+        extractTwitterCard: flags.metadataTwitter !== false,
+        extractJsonLd: flags.extractJsonLd === true,
+        extractMicrodata: flags.extractMicrodata === true
+      }
+    }
+
     const pages = await fetchSite(url, {
       concurrency: flags.concurrency,
       match: flags.match && ensureArray(flags.match),
       contentSelector: flags.contentSelector,
       limit: flags.limit,
+      rateLimit: {
+        requestsPerSecond: flags.rateLimit,
+        minDelay: flags.minDelay,
+        adaptive: flags.adaptive !== false,
+        respectRobotsTxt: flags.robots !== false,
+        perHostLimits: perHostLimits,
+      },
+      filter: filterOptions,
+      transform: {
+        format: flags.format,
+        prettyPrint: flags.prettyPrint === true,
+        removeExcessWhitespace: flags.excessWhitespace === false,
+        removeLineBreaks: flags.lineBreaks === false,
+      },
+      cache: cacheOptions,
+      metadata: metadataOptions,
     })
 
     if (pages.size === 0) {
@@ -55,14 +180,30 @@ cli
     )
 
     if (flags.outfile) {
+      const format = flags.format || (flags.outfile.endsWith(".json") ? "json" : "text")
       const output = serializePages(
         pages,
-        flags.outfile.endsWith(".json") ? "json" : "text"
+        format,
+        {
+          prettyPrint: flags.prettyPrint === true,
+          removeExcessWhitespace: flags.excessWhitespace === false, 
+          removeLineBreaks: flags.lineBreaks === false,
+        }
       )
       fs.mkdirSync(path.dirname(flags.outfile), { recursive: true })
       fs.writeFileSync(flags.outfile, output, "utf8")
     } else {
-      console.log(serializePages(pages, "text"))
+      // Default to text format for console output
+      const format = flags.format || "text"
+      console.log(serializePages(
+        pages,
+        format,
+        {
+          prettyPrint: flags.prettyPrint === true,
+          removeExcessWhitespace: flags.excessWhitespace === false, 
+          removeLineBreaks: flags.lineBreaks === false,
+        }
+      ))
     }
   })
 
