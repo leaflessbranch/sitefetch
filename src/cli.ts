@@ -2,7 +2,7 @@ import path from "node:path"
 import fs from "node:fs"
 import { cac } from "cac"
 import { encode } from "gpt-tokenizer/model/gpt-4o"
-import { fetchSite, serializePages } from "./index.ts"
+import { fetchSite, serializePages, Fetcher, ResumeHandler } from "./index.ts"
 import { logger } from "./logger.ts"
 import { ensureArray, formatNumber } from "./utils.ts"
 import { version } from "../package.json"
@@ -59,6 +59,22 @@ cli
   .option("--resume-from <id>", "Resume from a specific checkpoint ID")
   .option("--no-compress-checkpoint", "Disable checkpoint compression")
   .option("--max-checkpoints <number>", "Maximum number of checkpoints to keep")
+  // Add request configuration options
+  .option("--timeout <ms>", "Request timeout in milliseconds")
+  .option("--user-agent <agent>", "Custom User-Agent header")
+  .option("--cookies <json>", "Cookies to include with requests (JSON string)")
+  .option("--proxy <url>", "Proxy server to use for requests")
+  .option("--no-follow-redirects", "Disable following redirects")
+  .option("--max-redirects <number>", "Maximum number of redirects to follow")
+  .option("--max-response-size <bytes>", "Maximum response size in bytes")
+  .option("--no-verify-ssl", "Disable SSL certificate verification")
+  .option("--cert <path>", "Path to client certificate file")
+  .option("--key <path>", "Path to client key file")
+  .option("--ca <path>", "Path to CA certificate file")
+  // Error handling options
+  .option("--retries <number>", "Number of retry attempts for failed requests")
+  .option("--retry-delay <ms>", "Base delay between retries in milliseconds")
+  .option("--continue-on-error", "Continue fetching despite errors")
   .action(async (url, flags) => {
     if (!url) {
       cli.outputHelp()
@@ -244,6 +260,22 @@ cli
         delete requestOptions.headers
       }
     }
+    
+    // Parse error handling options
+    let errorOptions = undefined
+    if (flags.retries || flags.retryDelay || flags.continueOnError) {
+      errorOptions = {
+        retries: flags.retries && parseInt(flags.retries, 10),
+        retryDelay: flags.retryDelay && parseInt(flags.retryDelay, 10),
+        continueOnError: flags.continueOnError === true
+      }
+    }
+
+    // Initialize resume handler separately to capture checkpoint ID
+    let resumeHandler: ResumeHandler | undefined = undefined
+    if (resumeOptions?.enabled) {
+      resumeHandler = new ResumeHandler(resumeOptions)
+    }
 
     const pages = await fetchSite(
       url, 
@@ -270,10 +302,11 @@ cli
         metadata: metadataOptions,
         request: requestOptions,
         progress: progressOptions,
-        resume: resumeOptions
+        resume: resumeOptions,
+        errors: errorOptions
       },
       flags.resumeFrom
-    })
+    )
 
     if (pages.size === 0) {
       logger.warn("No pages found")
@@ -293,18 +326,11 @@ cli
       )}`
     )
     
-    // If resumable operations were enabled, display the checkpoint ID
-    if (flags.resume === true) {
-      const fetcher = new Fetcher({
-        ...flags,
-        resume: resumeOptions
-      })
-      const resumeHandler = fetcher.getResumeHandler()
+    // Display checkpoint ID if resumable operations were enabled
+    if (resumeHandler && resumeHandler.getCheckpointData()) {
       const checkpointData = resumeHandler.getCheckpointData()
-      if (checkpointData) {
-        logger.info(`Checkpoint ID: ${checkpointData.id}`)
-        logger.info(`To resume, use: --resume --resume-from ${checkpointData.id}`)
-      }
+      logger.info(`Checkpoint ID: ${checkpointData.id}`)
+      logger.info(`To resume later, use: --resume --resume-from ${checkpointData.id}`)
     }
 
     if (flags.outfile) {
@@ -320,6 +346,7 @@ cli
       )
       fs.mkdirSync(path.dirname(flags.outfile), { recursive: true })
       fs.writeFileSync(flags.outfile, output, "utf8")
+      logger.info(`Output written to ${flags.outfile}`)
     } else {
       // Default to text format for console output
       const format = flags.format || "text"

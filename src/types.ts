@@ -101,6 +101,20 @@ export interface CacheOptions {
   maxSize?: number
 }
 
+/**
+ * Options for error handling and retries
+ */
+export interface ErrorOptions {
+  /** Number of retries for failed requests */
+  retries?: number
+  /** Base delay between retries in milliseconds */
+  retryDelay?: number
+  /** Continue fetching despite errors */
+  continueOnError?: boolean
+  /** Function to determine if an error is retryable */
+  isRetryable?: (error: Error) => boolean
+}
+
 export type Options = {
   /**
    * Content filtering options
@@ -137,14 +151,7 @@ export type Options = {
   /**
    * Error handling options
    */
-  errors?: {
-    /** Number of retries for failed requests */
-    retries?: number
-    /** Base delay between retries in ms */
-    retryDelay?: number
-    /** Continue fetching despite errors */
-    continueOnError?: boolean
-  }
+  errors?: ErrorOptions
 
   /**
    * Request configuration options
@@ -471,4 +478,26 @@ export interface MetadataOptions {
     $: any, 
     url: string
   ) => Record<string, any> | Promise<Record<string, any>>>
+}
+
+/**
+ * Options for resumable operations
+ */
+export interface ResumeOptions {
+  /** Enable resumable operations */
+  enabled?: boolean
+  /** Directory to store checkpoint files */
+  checkpointDir?: string
+  /** Interval between checkpoints in milliseconds */
+  checkpointInterval?: number
+  /** File name format for checkpoints */
+  checkpointFileFormat?: string
+  /** Maximum number of checkpoints to keep */
+  maxCheckpoints?: number
+  /** Whether to compress checkpoints */
+  compress?: boolean
+  /** Compression level (0-9) */
+  compressionLevel?: number
+  /** Custom identifier for the checkpoint */
+  checkpointId?: string
 }

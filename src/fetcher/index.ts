@@ -12,7 +12,7 @@ import { RobotsParser } from './robots-parser'
 import { ContentFilter } from '../filters'
 import { Cache } from '../cache'
 import { MetadataExtractor } from '../metadata'
-import { handleError, TransformError } from '../errors'
+import { handleError, TransformError, withRetry } from '../errors'
 import { RequestManager } from './request-manager'
 import { TransformerFactory, serializePages as transformSerializePages } from '../transforms'
 import { ProgressTracker, ProgressEvent } from '../progress'
@@ -271,106 +271,106 @@ export class Fetcher {
       skipMatch?: boolean
     }
   ) {
-    const { host, pathname } = new URL(url)
-    
-    if (this.#fetched.has(pathname) || this.#limitReached()) {
-      return
-    }
-    
-    this.#fetched.add(pathname)
-    
-    // return if not matched
-    // we don't need to extract content for this page
-    if (
-    !options.skipMatch &&
-    this.options.match &&
-    !matchPath(pathname, this.options.match)
-    ) {
-    this.#progressTracker.pageSkipped(url, 'Does not match pattern')
-    
-      // Add to skipped URLs in checkpoint if resume is enabled
+    try {
+      const { host, pathname } = new URL(url)
+      
+      if (this.#fetched.has(pathname) || this.#limitReached()) {
+        return
+      }
+      
+      this.#fetched.add(pathname)
+      
+      // return if not matched
+      // we don't need to extract content for this page
+      if (
+      !options.skipMatch &&
+      this.options.match &&
+      !matchPath(pathname, this.options.match)
+      ) {
+        this.#progressTracker.pageSkipped(url, 'Does not match pattern')
+        
+        // Add to skipped URLs in checkpoint if resume is enabled
         if (this.options.resume?.enabled) {
           this.#resumeHandler.addSkippedUrl(url)
         }
         
         return
       }
-    
-    // Try to get from cache first if enabled
-    if (this.options.cache?.enabled) {
-      try {
-        const cachedPage = await this.#cache.get(url)
-        if (cachedPage) {
-          logger.info(`Using cached page for ${c.green(url)}`)
-          
-          // Store the cached page in our results
-          this.#pages.set(pathname, cachedPage)
-          
-          // Report cache hit to progress tracker
-          this.#progressTracker.pageFetched(url, cachedPage, 0)
-          
-          // Process links from the cached page if we need to crawl further
-          if (options.skipMatch) {
-            try {
-              const cachedHtml = cachedPage.rawContent || ''
-              const $ = load(cachedHtml)
-              
-              // Extract links for further crawling
-              const extraUrls: string[] = []
-              
-              $('a').each((_, el) => {
-                const href = $(el).attr('href')
+      
+      // Try to get from cache first if enabled
+      if (this.options.cache?.enabled) {
+        try {
+          const cachedPage = await this.#cache.get(url)
+          if (cachedPage) {
+            logger.info(`Using cached page for ${c.green(url)}`)
+            
+            // Store the cached page in our results
+            this.#pages.set(pathname, cachedPage)
+            
+            // Report cache hit to progress tracker
+            this.#progressTracker.pageFetched(url, cachedPage, 0)
+            
+            // Process links from the cached page if we need to crawl further
+            if (options.skipMatch) {
+              try {
+                const cachedHtml = cachedPage.rawContent || ''
+                const $ = load(cachedHtml)
                 
-                if (!href) {
-                  return
-                }
+                // Extract links for further crawling
+                const extraUrls: string[] = []
                 
-                try {
-                  const thisUrl = new URL(href, url)
-                  if (thisUrl.host !== host) {
+                $('a').each((_, el) => {
+                  const href = $(el).attr('href')
+                  
+                  if (!href) {
                     return
                   }
                   
-                  extraUrls.push(thisUrl.href)
-                } catch {
-                  logger.warn(`Failed to parse URL: ${href}`)
+                  try {
+                    const thisUrl = new URL(href, url)
+                    if (thisUrl.host !== host) {
+                      return
+                    }
+                    
+                    extraUrls.push(thisUrl.href)
+                  } catch {
+                    logger.warn(`Failed to parse URL: ${href}`)
+                  }
+                })
+                
+                // Add discovered URLs to the queue
+                if (extraUrls.length > 0) {
+                  for (const linkUrl of extraUrls) {
+                    this.#queue.add(() =>
+                      this.#fetchPage(linkUrl, { ...options, skipMatch: false })
+                    )
+                  }
                 }
-              })
-              
-              // Add discovered URLs to the queue
-              if (extraUrls.length > 0) {
-                for (const linkUrl of extraUrls) {
-                  this.#queue.add(() =>
-                    this.#fetchPage(linkUrl, { ...options, skipMatch: false })
-                  )
-                }
+              } catch (error) {
+                logger.warn(`Error processing links from cached page: ${error.message}`)
               }
-            } catch (error) {
-              logger.warn(`Error processing links from cached page: ${error.message}`)
             }
+            
+            return
           }
-          
-          return
+        } catch (error) {
+          logger.warn(`Cache error for ${url}: ${error.message}`)
+          // Continue with normal fetch if cache fails
         }
-      } catch (error) {
-        logger.warn(`Cache error for ${url}: ${error.message}`)
-        // Continue with normal fetch if cache fails
       }
-    }
-    
-    logger.info(`Fetching ${c.green(url)}`)
-    
-    // Notify progress tracker that we're starting to fetch
-    this.#progressTracker.pageFetching(url)
       
+      logger.info(`Fetching ${c.green(url)}`)
+      
+      // Notify progress tracker that we're starting to fetch
+      this.#progressTracker.pageFetching(url)
+        
       // Add to pending URLs in checkpoint if resume is enabled
       if (this.options.resume?.enabled) {
         this.#resumeHandler.addPendingUrl(url)
       }
-    
-    const fetchStartTime = Date.now()
-    
-    try {
+      
+      const fetchStartTime = Date.now()
+      
       // Use rate limiter to schedule the fetch
       const res = await this.#rateLimiter.schedule(async () => {
         try {
@@ -383,7 +383,17 @@ export class Fetcher {
               {}, 
               {
                 retries: this.options.errors?.retries,
-                retryDelay: this.options.errors?.retryDelay
+                retryDelay: this.options.errors?.retryDelay,
+                isRetryable: (error) => {
+                  // Allow custom retry logic via options
+                  if (this.options.errors?.isRetryable) {
+                    return this.options.errors.isRetryable(error)
+                  }
+                  // Default retry logic
+                  return !error.message.includes('rate limit') &&
+                         !error.message.includes('filtered') &&
+                         !error.message.includes('not match')
+                }
               }
             )
           }
@@ -512,6 +522,12 @@ export class Fetcher {
       if (!html) {
         logger.warn(`No readable content on ${pathname}`)
         this.#progressTracker.pageFailed(url, new Error('No readable content found'))
+        
+        // Add to failed URLs in checkpoint if resume is enabled
+        if (this.options.resume?.enabled) {
+          this.#resumeHandler.addFailedUrl(url)
+        }
+        
         return
       }
       
@@ -525,6 +541,12 @@ export class Fetcher {
       
       if (!article) {
         this.#progressTracker.pageFailed(url, new Error('Failed to parse content with Readability'))
+        
+        // Add to failed URLs in checkpoint if resume is enabled
+        if (this.options.resume?.enabled) {
+          this.#resumeHandler.addFailedUrl(url)
+        }
+        
         return
       }
       
@@ -548,8 +570,14 @@ export class Fetcher {
             tempDiv.innerHTML = rawContent
             content = tempDiv.textContent || ''
           } else {
-            // Use markdown transformer by default
-            content = toMarkdown(rawContent)
+            // Use the transformer factory
+            const transformer = TransformerFactory.getTransformer(format.toLowerCase())
+            if (transformer) {
+              content = transformer.transform(rawContent, transformOptions)
+            } else {
+              // Fall back to markdown
+              content = toMarkdown(rawContent)
+            }
           }
         } catch (error) {
           logger.warn(`Failed to transform content: ${error.message}`)
@@ -602,6 +630,12 @@ export class Fetcher {
         if (!includePage) {
           logger.info(`Filtered out page: ${pathname}`)
           this.#progressTracker.pageSkipped(url, 'Filtered out by content filters')
+          
+          // Add to skipped URLs in checkpoint if resume is enabled
+          if (this.options.resume?.enabled) {
+            this.#resumeHandler.addSkippedUrl(url)
+          }
+          
           return
         }
       }
@@ -629,7 +663,6 @@ export class Fetcher {
       
       // Report successful fetch to progress tracker
       this.#progressTracker.pageFetched(url, page, timeTaken)
-      
     } catch (error) {
       logger.error(`Error fetching ${url}: ${error.message}`)
       this.#progressTracker.pageFailed(url, error)

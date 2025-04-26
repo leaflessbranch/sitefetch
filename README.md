@@ -167,6 +167,106 @@ The request configuration system supports:
 6. Response size limits for security
 7. Automatic retry with exponential backoff
 
+### Error Handling
+
+Sitefetch provides robust error handling capabilities to deal with network failures and other issues:
+
+```bash
+# Set number of retries for failed requests
+sitefetch https://example.com -o site.txt --retries 5
+
+# Configure delay between retries (in milliseconds)
+sitefetch https://example.com -o site.txt --retry-delay 2000
+
+# Continue fetching other pages despite errors
+sitefetch https://example.com -o site.txt --continue-on-error
+```
+
+The error handling system features:
+
+1. Intelligent retry mechanism with exponential backoff
+2. Differentiation between retryable and non-retryable errors
+3. Detailed error reporting for debugging
+4. Ability to continue processing despite failures on certain pages
+
+### Enhanced Metadata Extraction
+
+Sitefetch can extract and preserve rich metadata from web pages:
+
+```bash
+# Enable metadata extraction
+sitefetch https://example.com -o site.txt --extract-metadata
+
+# Extract JSON-LD structured data
+sitefetch https://example.com -o site.txt --extract-json-ld
+
+# Extract microdata from HTML attributes
+sitefetch https://example.com -o site.txt --extract-microdata
+
+# Disable specific metadata types
+sitefetch https://example.com -o site.txt --extract-metadata --no-metadata-authors
+sitefetch https://example.com -o site.txt --extract-metadata --no-metadata-dates
+```
+
+The metadata system extracts:
+
+1. Publication dates and modification timestamps
+2. Author information
+3. Meta tags and OpenGraph properties
+4. Twitter card metadata
+5. JSON-LD structured data
+6. Microdata embedded in HTML
+
+### Pagination Support
+
+Sitefetch automatically detects and follows pagination to capture multi-page content:
+
+```bash
+# Enable pagination with default settings
+sitefetch https://example.com/blog -o blog.txt --pagination
+
+# Limit the maximum number of pages to follow per starting URL
+sitefetch https://example.com/blog -o blog.txt --pagination --max-pages 5
+
+# Specify pagination detection strategy
+sitefetch https://example.com/blog -o blog.txt --pagination --strategy next-link
+```
+
+The pagination system:
+
+1. Automatically detects common pagination patterns
+2. Preserves page numbering and ordering in the output
+3. Supports various pagination implementations (numbered links, "next" buttons)
+4. Configurable depth limits to prevent endless crawling
+
+### Resumable Operations
+
+Sitefetch supports checkpointing and resumable operations for handling large sites or dealing with interruptions:
+
+```bash
+# Enable resumable operations
+sitefetch https://example.com -o site.txt --resume
+
+# Resume a previously interrupted run
+sitefetch https://example.com -o site.txt --resume --resume-from "checkpoint-abc123"
+
+# Configure checkpoint directory
+sitefetch https://example.com -o site.txt --resume --checkpoint-dir "./checkpoints"
+
+# Set checkpoint interval (in milliseconds)
+sitefetch https://example.com -o site.txt --resume --checkpoint-interval 60000
+
+# Specify a custom checkpoint ID
+sitefetch https://example.com -o site.txt --resume --checkpoint-id "my-project"
+```
+
+The resumable operations system:
+
+1. Creates periodic checkpoints of crawl progress
+2. Preserves successful fetches and tracks pending URLs
+3. Can be resumed after interruptions or failures
+4. Configurable checkpoint frequency and storage
+
 ### Content Transformation
 
 Sitefetch can output content in various formats and with different processing options:
@@ -221,10 +321,6 @@ The progress tracking system provides:
 3. Events for tracking fetch successes, failures, and skipped pages
 4. Programmatic access to progress data through the API
 
-## Plug
-
-If you like this, please check out my LLM chat app: https://chatwise.app
-
 ## API
 
 ```ts
@@ -260,7 +356,55 @@ await fetchSite("https://egoist.dev", {
 })
 ```
 
-Check out options in [types.ts](./src/types.ts).
+For more advanced use cases, you can use the more granular API objects:
+
+```ts
+import { 
+  Fetcher, 
+  RateLimiter, 
+  Cache, 
+  ContentFilter, 
+  MetadataExtractor, 
+  ProgressTracker,
+  ResumeHandler
+} from "sitefetch"
+
+// Create instances of the components you need
+const rateLimiter = new RateLimiter({
+  requestsPerSecond: 3,
+  adaptive: true
+})
+
+const cache = new Cache({
+  enabled: true,
+  directory: './cache',
+  ttl: 3600
+})
+
+// Create a fetcher with all options
+const fetcher = new Fetcher({
+  concurrency: 5,
+  rateLimit: rateLimiter,
+  cache: cache,
+  // Other options...
+})
+
+// Start fetching
+const pages = await fetcher.fetchSite("https://example.com")
+
+// Get statistics
+const stats = fetcher.getStats()
+console.log(`Fetched ${stats.pagesCount} pages`)
+
+// Apply filtering after fetching
+const filteredPages = await fetcher.applyFiltering()
+```
+
+Check out detailed options in [types.ts](./src/types.ts).
+
+## Plug
+
+If you like this, please check out my LLM chat app: https://chatwise.app
 
 ## License
 
