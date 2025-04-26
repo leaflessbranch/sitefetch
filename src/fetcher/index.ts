@@ -16,6 +16,7 @@ import { handleError, TransformError } from '../errors'
 import { RequestManager } from './request-manager'
 import { TransformerFactory, serializePages as transformSerializePages } from '../transforms'
 import { ProgressTracker, ProgressEvent } from '../progress'
+import { ResumeHandler } from '../resume'
 import type { Options, FetchSiteResult, Page, TransformOptions } from '../types'
 
 /**
@@ -32,6 +33,7 @@ export class Fetcher {
   #metadataExtractor: MetadataExtractor
   #requestManager: RequestManager
   #progressTracker: ProgressTracker
+  #resumeHandler: ResumeHandler
   
   /**
    * Creates a new Fetcher instance
@@ -62,6 +64,9 @@ export class Fetcher {
     
     // Initialize progress tracker
     this.#progressTracker = new ProgressTracker(options.progress)
+    
+    // Initialize resume handler
+    this.#resumeHandler = new ResumeHandler(options.resume)
     
     // Set up progress event handlers
     this.#setupProgressEvents()
@@ -141,9 +146,10 @@ export class Fetcher {
    * Fetches a site starting from a URL
    * 
    * @param url Starting URL
+   * @param checkpointId Optional checkpoint ID to resume from
    * @returns Map of pages keyed by pathname
    */
-  async fetchSite(url: string): Promise<FetchSiteResult> {
+  async fetchSite(url: string, checkpointId?: string): Promise<FetchSiteResult> {
     const startUrl = new URL(url)
     
     logger.info(
@@ -155,14 +161,93 @@ export class Fetcher {
     // Initialize robots.txt parsing for the target host
     await this.#initRobotsForHost(startUrl.hostname)
     
-    // Start progress tracking
+    // Start progress tracking - we'll update the total after resume check
     this.#progressTracker.start(this.options.limit || 100) // Initial estimate
     
-    await this.#fetchPage(url, {
-      skipMatch: true,
-    })
+    // Check if we're resuming from a checkpoint
+    if (checkpointId && this.options.resume?.enabled) {
+      try {
+        // Try to load the checkpoint
+        const checkpoint = await this.#resumeHandler.loadCheckpoint(checkpointId)
+        
+        logger.info(`Resuming from checkpoint ${checkpointId}`)
+        
+        // Restore pages from checkpoint
+        this.#pages = new Map(Object.entries(checkpoint.pages))
+        
+        // Update the fetched URLs set
+        this.#fetched = new Set(checkpoint.processedUrls.concat(
+          checkpoint.failedUrls,
+          checkpoint.skippedUrls
+        ))
+        
+        // Queue pending URLs for processing
+        for (const pendingUrl of checkpoint.pendingUrls) {
+          this.#queue.add(() => this.#fetchPage(pendingUrl, { skipMatch: false }))
+        }
+        
+        // Update progress tracker with current counts
+        this.#progressTracker.updateTotal(
+          checkpoint.processedUrls.length +
+          checkpoint.failedUrls.length +
+          checkpoint.skippedUrls.length +
+          checkpoint.pendingUrls.length
+        )
+        
+        // Report already processed pages to progress tracker
+        for (const processedUrl of checkpoint.processedUrls) {
+          const { pathname } = new URL(processedUrl)
+          const page = checkpoint.pages[pathname]
+          if (page) {
+            this.#progressTracker.pageFetched(processedUrl, page, 0)
+          }
+        }
+        
+        // Report failed pages to progress tracker
+        for (const failedUrl of checkpoint.failedUrls) {
+          this.#progressTracker.pageFailed(failedUrl, new Error('Failed in previous run'))
+        }
+        
+        // Report skipped pages to progress tracker
+        for (const skippedUrl of checkpoint.skippedUrls) {
+          this.#progressTracker.pageSkipped(skippedUrl, 'Skipped in previous run')
+        }
+        
+        logger.info(`Resumed from checkpoint with ${this.#pages.size} pages and ${checkpoint.pendingUrls.length} pending URLs`)
+      } catch (error) {
+        logger.warn(`Failed to resume from checkpoint: ${error.message}`)
+        logger.warn('Starting a fresh fetch')
+        
+        // Initialize a new checkpoint
+        if (this.options.resume?.enabled) {
+          await this.#resumeHandler.initializeCheckpoint(url, {
+            options: this.options
+          })
+        }
+        
+        // Process the starting URL
+        await this.#fetchPage(url, { skipMatch: true })
+      }
+    } else {
+      // Start a new fetch
+      if (this.options.resume?.enabled) {
+        // Initialize a new checkpoint
+        await this.#resumeHandler.initializeCheckpoint(url, {
+          options: this.options
+        })
+      }
+      
+      // Process the starting URL
+      await this.#fetchPage(url, { skipMatch: true })
+    }
     
+    // Wait for all queued operations to complete
     await this.#queue.onIdle()
+    
+    // Complete the checkpoint if enabled
+    if (this.options.resume?.enabled) {
+      await this.#resumeHandler.complete()
+    }
     
     // Complete progress tracking
     this.#progressTracker.complete()
@@ -197,13 +282,19 @@ export class Fetcher {
     // return if not matched
     // we don't need to extract content for this page
     if (
-      !options.skipMatch &&
-      this.options.match &&
-      !matchPath(pathname, this.options.match)
+    !options.skipMatch &&
+    this.options.match &&
+    !matchPath(pathname, this.options.match)
     ) {
-      this.#progressTracker.pageSkipped(url, 'Does not match pattern')
-      return
-    }
+    this.#progressTracker.pageSkipped(url, 'Does not match pattern')
+    
+      // Add to skipped URLs in checkpoint if resume is enabled
+        if (this.options.resume?.enabled) {
+          this.#resumeHandler.addSkippedUrl(url)
+        }
+        
+        return
+      }
     
     // Try to get from cache first if enabled
     if (this.options.cache?.enabled) {
@@ -271,6 +362,11 @@ export class Fetcher {
     
     // Notify progress tracker that we're starting to fetch
     this.#progressTracker.pageFetching(url)
+      
+      // Add to pending URLs in checkpoint if resume is enabled
+      if (this.options.resume?.enabled) {
+        this.#resumeHandler.addPendingUrl(url)
+      }
     
     const fetchStartTime = Date.now()
     
@@ -302,11 +398,23 @@ export class Fetcher {
       if (!res.ok) {
         logger.warn(`Failed to fetch ${url}: ${res.statusText}`)
         this.#progressTracker.pageFailed(url, new Error(`HTTP ${res.status}: ${res.statusText}`))
+        
+        // Add to failed URLs in checkpoint if resume is enabled
+        if (this.options.resume?.enabled) {
+          this.#resumeHandler.addFailedUrl(url)
+        }
+        
         return
       }
       
       if (this.#limitReached()) {
         this.#progressTracker.pageSkipped(url, 'Limit reached')
+        
+        // Add to skipped URLs in checkpoint if resume is enabled
+        if (this.options.resume?.enabled) {
+          this.#resumeHandler.addSkippedUrl(url)
+        }
+        
         return
       }
       
@@ -315,6 +423,12 @@ export class Fetcher {
       if (!contentType?.includes('text/html')) {
         logger.warn(`Not a HTML page: ${url}`)
         this.#progressTracker.pageSkipped(url, 'Not HTML content')
+        
+        // Add to skipped URLs in checkpoint if resume is enabled
+        if (this.options.resume?.enabled) {
+          this.#resumeHandler.addSkippedUrl(url)
+        }
+        
         return
       }
       
@@ -324,6 +438,12 @@ export class Fetcher {
       if (resUrl.host !== host) {
         logger.warn(`Redirected from ${host} to ${resUrl.host}`)
         this.#progressTracker.pageSkipped(url, `Redirected to different host: ${resUrl.host}`)
+        
+        // Add to skipped URLs in checkpoint if resume is enabled
+        if (this.options.resume?.enabled) {
+          this.#resumeHandler.addSkippedUrl(url)
+        }
+        
         return
       }
       
@@ -498,6 +618,11 @@ export class Fetcher {
         }
       }
       
+      // Add to checkpoint if resume is enabled
+      if (this.options.resume?.enabled) {
+        this.#resumeHandler.addFetchedPage(pathname, page)
+      }
+      
       // Calculate time taken to fetch and process
       const fetchEndTime = Date.now()
       const timeTaken = fetchEndTime - fetchStartTime
@@ -508,6 +633,11 @@ export class Fetcher {
     } catch (error) {
       logger.error(`Error fetching ${url}: ${error.message}`)
       this.#progressTracker.pageFailed(url, error)
+      
+      // Add to failed URLs in checkpoint if resume is enabled
+      if (this.options.resume?.enabled) {
+        this.#resumeHandler.addFailedUrl(url)
+      }
     }
   }
   
@@ -525,7 +655,14 @@ export class Fetcher {
       rateLimiterStats: this.#rateLimiter.getStats(),
       robotsTxtCacheSize: RobotsParser.getCacheSize(),
       cacheStats: this.options.cache?.enabled ? this.#cache.getStats() : null,
-      progressStats: this.#progressTracker.getStats()
+      progressStats: this.#progressTracker.getStats(),
+      resumeStats: this.options.resume?.enabled ? {
+        processedUrls: this.#resumeHandler.getProcessedUrls().length,
+        failedUrls: this.#resumeHandler.getFailedUrls().length,
+        skippedUrls: this.#resumeHandler.getSkippedUrls().length,
+        pendingUrls: this.#resumeHandler.getPendingUrls().length,
+        checkpointId: this.#resumeHandler.getCheckpointData()?.id
+      } : null
     }
   }
   
@@ -629,6 +766,24 @@ export class Fetcher {
   }
   
   /**
+   * Gets the resume handler instance
+   * 
+   * @returns The resume handler
+   */
+  getResumeHandler(): ResumeHandler {
+    return this.#resumeHandler
+  }
+  
+  /**
+   * Updates resume options
+   * 
+   * @param options New resume options
+   */
+  updateResumeOptions(options: Partial<import('../types').ResumeOptions>): void {
+    this.#resumeHandler.updateOptions(options)
+  }
+  
+  /**
    * Applies filtering to already fetched pages
    * 
    * @returns Filtered pages
@@ -648,14 +803,16 @@ export class Fetcher {
  * 
  * @param url URL to start fetching from
  * @param options Options for fetching
+ * @param checkpointId Optional checkpoint ID to resume from
  * @returns Map of pages keyed by pathname
  */
 export async function fetchSite(
   url: string,
-  options: Options
+  options: Options,
+  checkpointId?: string
 ): Promise<FetchSiteResult> {
   const fetcher = new Fetcher(options)
-  const pages = await fetcher.fetchSite(url)
+  const pages = await fetcher.fetchSite(url, checkpointId)
   
   // Apply post-processing filtering if requested
   if (options.filter) {

@@ -416,6 +416,18 @@ export class ProgressTracker extends EventEmitter {
   }
 
   /**
+   * Update the total number of pages to process
+   * 
+   * @param total New total pages count
+   */
+  updateTotal(total: number): void {
+    if (!this.options.enabled || !this.isActive) return
+    
+    this.stats.total = total
+    this.updateProgress()
+  }
+
+  /**
    * Get current progress statistics
    * 
    * @returns Progress statistics

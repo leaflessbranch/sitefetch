@@ -52,6 +52,13 @@ cli
   .option("--progress-update-interval <ms>", "Progress update interval in milliseconds")
   .option("--progress-bar-width <width>", "Width of the progress bar in characters")
   .option("--no-progress-bar", "Disable progress bar display")
+  .option("--resume", "Enable resumable operations")
+  .option("--checkpoint-dir <path>", "Directory to store checkpoint files")
+  .option("--checkpoint-interval <ms>", "Interval between checkpoints in milliseconds")
+  .option("--checkpoint-id <id>", "Custom identifier for the checkpoint")
+  .option("--resume-from <id>", "Resume from a specific checkpoint ID")
+  .option("--no-compress-checkpoint", "Disable checkpoint compression")
+  .option("--max-checkpoints <number>", "Maximum number of checkpoints to keep")
   .action(async (url, flags) => {
     if (!url) {
       cli.outputHelp()
@@ -157,6 +164,24 @@ cli
       }
     }
     
+    // Parse resume options
+    let resumeOptions = undefined
+    if (flags.resume !== undefined ||
+        flags.checkpointDir ||
+        flags.checkpointInterval ||
+        flags.checkpointId ||
+        flags.compressCheckpoint === false ||
+        flags.maxCheckpoints) {
+      resumeOptions = {
+        enabled: flags.resume === true,
+        checkpointDir: flags.checkpointDir,
+        checkpointInterval: flags.checkpointInterval && parseInt(flags.checkpointInterval, 10),
+        checkpointId: flags.checkpointId,
+        compress: flags.compressCheckpoint !== false,
+        maxCheckpoints: flags.maxCheckpoints && parseInt(flags.maxCheckpoints, 10)
+      }
+    }
+    
     // Parse request configuration options
     let requestOptions = undefined
     if (flags.timeout || 
@@ -220,29 +245,34 @@ cli
       }
     }
 
-    const pages = await fetchSite(url, {
-      concurrency: flags.concurrency,
-      match: flags.match && ensureArray(flags.match),
-      contentSelector: flags.contentSelector,
-      limit: flags.limit,
-      rateLimit: {
-        requestsPerSecond: flags.rateLimit,
-        minDelay: flags.minDelay,
-        adaptive: flags.adaptive !== false,
-        respectRobotsTxt: flags.robots !== false,
-        perHostLimits: perHostLimits,
+    const pages = await fetchSite(
+      url, 
+      {
+        concurrency: flags.concurrency,
+        match: flags.match && ensureArray(flags.match),
+        contentSelector: flags.contentSelector,
+        limit: flags.limit,
+        rateLimit: {
+          requestsPerSecond: flags.rateLimit,
+          minDelay: flags.minDelay,
+          adaptive: flags.adaptive !== false,
+          respectRobotsTxt: flags.robots !== false,
+          perHostLimits: perHostLimits,
+        },
+        filter: filterOptions,
+        transform: {
+          format: flags.format,
+          prettyPrint: flags.prettyPrint === true,
+          removeExcessWhitespace: flags.excessWhitespace === false,
+          removeLineBreaks: flags.lineBreaks === false,
+        },
+        cache: cacheOptions,
+        metadata: metadataOptions,
+        request: requestOptions,
+        progress: progressOptions,
+        resume: resumeOptions
       },
-      filter: filterOptions,
-      transform: {
-        format: flags.format,
-        prettyPrint: flags.prettyPrint === true,
-        removeExcessWhitespace: flags.excessWhitespace === false,
-        removeLineBreaks: flags.lineBreaks === false,
-      },
-      cache: cacheOptions,
-      metadata: metadataOptions,
-      request: requestOptions,
-      progress: progressOptions
+      flags.resumeFrom
     })
 
     if (pages.size === 0) {
@@ -262,6 +292,20 @@ cli
         totalTokenCount
       )}`
     )
+    
+    // If resumable operations were enabled, display the checkpoint ID
+    if (flags.resume === true) {
+      const fetcher = new Fetcher({
+        ...flags,
+        resume: resumeOptions
+      })
+      const resumeHandler = fetcher.getResumeHandler()
+      const checkpointData = resumeHandler.getCheckpointData()
+      if (checkpointData) {
+        logger.info(`Checkpoint ID: ${checkpointData.id}`)
+        logger.info(`To resume, use: --resume --resume-from ${checkpointData.id}`)
+      }
+    }
 
     if (flags.outfile) {
       const format = flags.format || (flags.outfile.endsWith(".json") ? "json" : "text")

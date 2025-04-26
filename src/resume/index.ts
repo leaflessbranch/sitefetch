@@ -263,3 +263,436 @@ export class ResumeHandler {
     }
 
     // Add URL to failed URLs
+    if (!this.checkpointData.failedUrls.includes(url)) {
+      this.checkpointData.failedUrls.push(url)
+    }
+    
+    // Remove from pending URLs if present
+    const pendingIndex = this.checkpointData.pendingUrls.indexOf(url)
+    if (pendingIndex !== -1) {
+      this.checkpointData.pendingUrls.splice(pendingIndex, 1)
+    }
+  }
+
+  /**
+   * Updates the checkpoint with a skipped URL
+   * 
+   * @param url URL that was skipped
+   */
+  addSkippedUrl(url: string): void {
+    if (!this.checkpointData) {
+      logger.warn('No active checkpoint, skipped URL will not be saved')
+      return
+    }
+
+    // Add URL to skipped URLs
+    if (!this.checkpointData.skippedUrls.includes(url)) {
+      this.checkpointData.skippedUrls.push(url)
+    }
+    
+    // Remove from pending URLs if present
+    const pendingIndex = this.checkpointData.pendingUrls.indexOf(url)
+    if (pendingIndex !== -1) {
+      this.checkpointData.pendingUrls.splice(pendingIndex, 1)
+    }
+  }
+
+  /**
+   * Adds a URL to the pending queue
+   * 
+   * @param url URL to add to pending queue
+   */
+  addPendingUrl(url: string): void {
+    if (!this.checkpointData) {
+      logger.warn('No active checkpoint, pending URL will not be saved')
+      return
+    }
+
+    // Check if the URL is already processed, failed, or skipped
+    if (
+      this.checkpointData.processedUrls.includes(url) ||
+      this.checkpointData.failedUrls.includes(url) ||
+      this.checkpointData.skippedUrls.includes(url) ||
+      this.checkpointData.pendingUrls.includes(url)
+    ) {
+      return
+    }
+
+    // Add URL to pending URLs
+    this.checkpointData.pendingUrls.push(url)
+  }
+
+  /**
+   * Updates the metadata of the checkpoint
+   * 
+   * @param metadata New metadata to merge with existing metadata
+   */
+  updateMetadata(metadata: Record<string, any>): void {
+    if (!this.checkpointData) {
+      logger.warn('No active checkpoint, metadata will not be updated')
+      return
+    }
+
+    this.checkpointData.metadata = {
+      ...this.checkpointData.metadata,
+      ...metadata
+    }
+  }
+
+  /**
+   * Saves the current checkpoint
+   * 
+   * @returns Promise that resolves when the checkpoint is saved
+   */
+  async saveCheckpoint(): Promise<void> {
+    if (!this.options.enabled || !this.checkpointData) {
+      return
+    }
+
+    try {
+      // Update timestamp
+      this.checkpointData.timestamp = Date.now()
+      
+      // Serialize the checkpoint data
+      const checkpointJson = JSON.stringify(this.checkpointData)
+      
+      // Create a filename
+      const filename = this.options.checkpointFileFormat!
+        .replace('{{id}}', this.checkpointData.id)
+        .replace('{{timestamp}}', Date.now().toString())
+      
+      const compressionEnabled = this.options.compress !== false
+      const filePath = path.join(
+        this.options.checkpointDir!,
+        `${filename}${compressionEnabled ? '.gz' : ''}`
+      )
+      
+      // Compress if enabled
+      if (compressionEnabled) {
+        const compressed = await gzipAsync(Buffer.from(checkpointJson), {
+          level: this.options.compressionLevel
+        })
+        fs.writeFileSync(filePath, compressed)
+      } else {
+        fs.writeFileSync(filePath, checkpointJson, 'utf-8')
+      }
+      
+      logger.info(`Saved checkpoint to ${filePath}`)
+      
+      // Clean up old checkpoints if needed
+      if (this.options.maxCheckpoints && this.options.maxCheckpoints > 0) {
+        await this.pruneOldCheckpoints()
+      }
+      
+      this.lastCheckpoint = Date.now()
+    } catch (error) {
+      logger.warn(`Failed to save checkpoint: ${error.message}`)
+      throw new ResumeError(
+        `Failed to save checkpoint: ${error.message}`,
+        ResumeErrorCode.CHECKPOINT_SAVE_ERROR
+      )
+    }
+  }
+
+  /**
+   * Ensures the checkpoint directory exists
+   * 
+   * @private
+   */
+  private ensureCheckpointDirectory(): void {
+    const dir = this.options.checkpointDir || DEFAULT_RESUME_OPTIONS.checkpointDir!
+    
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true })
+        logger.info(`Created checkpoint directory: ${dir}`)
+      }
+    } catch (error) {
+      logger.warn(`Failed to create checkpoint directory: ${error.message}`)
+      throw new ResumeError(
+        `Failed to create checkpoint directory: ${error.message}`,
+        ResumeErrorCode.CHECKPOINT_SAVE_ERROR
+      )
+    }
+  }
+
+  /**
+   * Finds the latest checkpoint file for the given ID
+   * 
+   * @param id Checkpoint ID to find
+   * @returns Filename of the latest checkpoint or undefined if not found
+   * @private
+   */
+  private async findLatestCheckpoint(id: string): Promise<string | undefined> {
+    const dir = this.options.checkpointDir || DEFAULT_RESUME_OPTIONS.checkpointDir!
+    
+    try {
+      if (!fs.existsSync(dir)) {
+        return undefined
+      }
+      
+      // Get all checkpoint files
+      const files = fs.readdirSync(dir)
+      
+      // Filter for files matching the ID
+      const matchingFiles = files.filter(file => 
+        file.includes(`checkpoint-${id}`) &&
+        (file.endsWith('.json') || file.endsWith('.json.gz'))
+      )
+      
+      if (matchingFiles.length === 0) {
+        return undefined
+      }
+      
+      // Sort by timestamp (newest first)
+      matchingFiles.sort((a, b) => {
+        // Extract timestamp from filename
+        const getTimestamp = (filename: string) => {
+          const match = filename.match(/-(\d+)\.json/)
+          return match ? parseInt(match[1], 10) : 0
+        }
+        
+        return getTimestamp(b) - getTimestamp(a)
+      })
+      
+      return matchingFiles[0]
+    } catch (error) {
+      logger.warn(`Failed to find checkpoint: ${error.message}`)
+      return undefined
+    }
+  }
+
+  /**
+   * Validates the checkpoint data structure
+   * 
+   * @param data Checkpoint data to validate
+   * @private
+   */
+  private validateCheckpointData(data: CheckpointData): void {
+    // Check for required fields
+    if (!data.id || !data.baseUrl || !data.timestamp) {
+      throw new ResumeError(
+        'Checkpoint data is missing required fields',
+        ResumeErrorCode.CHECKPOINT_CORRUPTED
+      )
+    }
+    
+    // Ensure arrays exist
+    if (!Array.isArray(data.processedUrls)) data.processedUrls = []
+    if (!Array.isArray(data.failedUrls)) data.failedUrls = []
+    if (!Array.isArray(data.skippedUrls)) data.skippedUrls = []
+    if (!Array.isArray(data.pendingUrls)) data.pendingUrls = []
+    
+    // Ensure pages object exists
+    if (!data.pages || typeof data.pages !== 'object') {
+      data.pages = {}
+    }
+  }
+
+  /**
+   * Removes old checkpoint files to keep only the most recent ones
+   * 
+   * @private
+   */
+  private async pruneOldCheckpoints(): Promise<void> {
+    if (!this.checkpointData) return
+    
+    const dir = this.options.checkpointDir || DEFAULT_RESUME_OPTIONS.checkpointDir!
+    const maxFiles = this.options.maxCheckpoints || 5
+    
+    try {
+      // Get all checkpoint files for this ID
+      const files = fs.readdirSync(dir)
+      const matchingFiles = files.filter(file => 
+        file.includes(`checkpoint-${this.checkpointData!.id}`) &&
+        (file.endsWith('.json') || file.endsWith('.json.gz'))
+      )
+      
+      if (matchingFiles.length <= maxFiles) {
+        return
+      }
+      
+      // Sort by timestamp (newest first)
+      matchingFiles.sort((a, b) => {
+        // Extract timestamp from filename
+        const getTimestamp = (filename: string) => {
+          const match = filename.match(/-(\d+)\.json/)
+          return match ? parseInt(match[1], 10) : 0
+        }
+        
+        return getTimestamp(b) - getTimestamp(a)
+      })
+      
+      // Remove older files
+      const filesToRemove = matchingFiles.slice(maxFiles)
+      for (const file of filesToRemove) {
+        const filePath = path.join(dir, file)
+        fs.unlinkSync(filePath)
+        logger.info(`Removed old checkpoint: ${filePath}`)
+      }
+    } catch (error) {
+      logger.warn(`Failed to prune old checkpoints: ${error.message}`)
+    }
+  }
+
+  /**
+   * Starts the checkpoint timer for periodic saves
+   * 
+   * @private
+   */
+  private startCheckpointTimer(): void {
+    // Clear any existing timer
+    if (this.checkpointTimer) {
+      clearInterval(this.checkpointTimer)
+      this.checkpointTimer = null
+    }
+    
+    // Skip if disabled or no interval set
+    if (!this.options.enabled || !this.options.checkpointInterval) {
+      return
+    }
+    
+    // Set up the timer
+    this.checkpointTimer = setInterval(async () => {
+      try {
+        await this.saveCheckpoint()
+      } catch (error) {
+        logger.warn(`Auto-checkpoint failed: ${error.message}`)
+      }
+    }, this.options.checkpointInterval)
+  }
+
+  /**
+   * Stops the checkpoint timer
+   */
+  stopCheckpointTimer(): void {
+    if (this.checkpointTimer) {
+      clearInterval(this.checkpointTimer)
+      this.checkpointTimer = null
+    }
+  }
+
+  /**
+   * Gets the current checkpoint data
+   * 
+   * @returns Current checkpoint data or null if none
+   */
+  getCheckpointData(): CheckpointData | null {
+    return this.checkpointData
+  }
+
+  /**
+   * Gets the URLs that have been processed
+   * 
+   * @returns Array of processed URLs
+   */
+  getProcessedUrls(): string[] {
+    return this.checkpointData?.processedUrls || []
+  }
+
+  /**
+   * Gets the URLs that have failed
+   * 
+   * @returns Array of failed URLs
+   */
+  getFailedUrls(): string[] {
+    return this.checkpointData?.failedUrls || []
+  }
+
+  /**
+   * Gets the URLs that have been skipped
+   * 
+   * @returns Array of skipped URLs
+   */
+  getSkippedUrls(): string[] {
+    return this.checkpointData?.skippedUrls || []
+  }
+
+  /**
+   * Gets the URLs that are pending
+   * 
+   * @returns Array of pending URLs
+   */
+  getPendingUrls(): string[] {
+    return this.checkpointData?.pendingUrls || []
+  }
+
+  /**
+   * Checks if a URL has been processed
+   * 
+   * @param url URL to check
+   * @returns Whether the URL has been processed
+   */
+  isUrlProcessed(url: string): boolean {
+    return this.checkpointData?.processedUrls.includes(url) || false
+  }
+
+  /**
+   * Checks if a URL has failed
+   * 
+   * @param url URL to check
+   * @returns Whether the URL has failed
+   */
+  isUrlFailed(url: string): boolean {
+    return this.checkpointData?.failedUrls.includes(url) || false
+  }
+
+  /**
+   * Checks if a URL has been skipped
+   * 
+   * @param url URL to check
+   * @returns Whether the URL has been skipped
+   */
+  isUrlSkipped(url: string): boolean {
+    return this.checkpointData?.skippedUrls.includes(url) || false
+  }
+
+  /**
+   * Checks if a URL is pending
+   * 
+   * @param url URL to check
+   * @returns Whether the URL is pending
+   */
+  isUrlPending(url: string): boolean {
+    return this.checkpointData?.pendingUrls.includes(url) || false
+  }
+
+  /**
+   * Completes the checkpoint operations and saves final state
+   */
+  async complete(): Promise<void> {
+    // Save one last checkpoint
+    if (this.options.enabled && this.checkpointData) {
+      await this.saveCheckpoint()
+    }
+    
+    // Stop the checkpoint timer
+    this.stopCheckpointTimer()
+    
+    logger.info('Checkpoint operations completed')
+  }
+
+  /**
+   * Updates the options for the handler
+   * 
+   * @param options New options to merge with existing options
+   */
+  updateOptions(options: Partial<ResumeOptions>): void {
+    this.options = { ...this.options, ...options }
+    
+    // Restart the timer if the interval changed
+    if (options.checkpointInterval && this.checkpointTimer) {
+      this.startCheckpointTimer()
+    }
+  }
+}
+
+/**
+ * Creates a resume handler with the specified options
+ * 
+ * @param options Resume options
+ * @returns Resume handler instance
+ */
+export function createResumeHandler(options?: ResumeOptions): ResumeHandler {
+  return new ResumeHandler(options)
+}

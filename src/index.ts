@@ -2,6 +2,8 @@
 export { ProgressTracker, createProgressTracker } from './progress'
 // Re-export public API from fetcher module
 export { fetchSite, serializePages, Fetcher } from './fetcher'
+// Re-export resume handling classes
+export { ResumeHandler, createResumeHandler } from './resume'
 
 // Re-export rate limiting classes
 export { RateLimiter } from './fetcher/rate-limiter'
@@ -20,7 +22,7 @@ export { Cache, createCache } from './cache'
 export { MetadataExtractor, createMetadataExtractor } from './metadata'
 
 // Re-export types for public API
-export type { Options, Page, FetchSiteResult, RateLimitOptions, FilterOptions, CacheOptions, MetadataOptions } from './types'
+export type { Options, Page, FetchSiteResult, RateLimitOptions, FilterOptions, CacheOptions, MetadataOptions, ResumeOptions } from './types'
 
 // Export error classes for users to handle specific errors
 export {
@@ -34,6 +36,9 @@ export {
   TransformError,
   ProxyError
 } from './errors'
+
+// Export resume error classes
+export { ResumeError } from './resume'
 
 // Export metadata error classes
 export { MetadataError } from './metadata'

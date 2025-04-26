@@ -180,6 +180,11 @@ export type Options = {
    * Progress reporting options
    */
   progress?: ProgressOptions
+  
+  /**
+   * Resumable operations options
+   */
+  resume?: ResumeOptions
 }
 
 /**
@@ -392,6 +397,7 @@ export enum ErrorCode {
   TRANSFORM_ERROR = 'TRANSFORM_ERROR',
   METADATA_ERROR = 'METADATA_ERROR',
   PROXY_ERROR = 'PROXY_ERROR',
+  RESUME_ERROR = 'RESUME_ERROR',
   UNKNOWN_ERROR = 'UNKNOWN_ERROR'
 }
 
