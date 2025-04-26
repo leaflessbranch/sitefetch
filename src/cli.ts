@@ -23,10 +23,32 @@ cli
   .option("--no-adaptive", "Disable adaptive rate limiting")
   .option("--no-robots", "Ignore robots.txt crawl-delay directives")
   .option("--host-limits <json>", "Custom rate limits for specific hosts (JSON string)")
+  .option("--max-concurrent <number>", "Maximum concurrent requests (default: 3)")
+  .option("--time-window <ms>", "Time window for rate limiting in milliseconds (default: 1000)")
+  .option("--default-delay <ms>", "Default delay for hosts with no explicit rate limit (default: 1000)")
+  .option("--no-detect-rate-limits", "Disable automatic detection of rate limit responses")
   .option("--format <format>", "Output format (markdown, text, html, json, xml, csv)")
   .option("--pretty-print", "Pretty print the output")
   .option("--no-excess-whitespace", "Remove excessive whitespace")
   .option("--no-line-breaks", "Remove consecutive line breaks")
+  // Markdown-specific options
+  .option("--heading-style <style>", "Heading style for markdown (atx or setext)")
+  .option("--code-block-style <style>", "Code block style for markdown (fenced or indented)")
+  .option("--bullet-list-marker <char>", "Bullet list marker for markdown (*, +, or -)")
+  .option("--list-item-spacing", "Add spacing between list items")
+  // HTML-specific options
+  .option("--xml-mode", "Output HTML as XML")
+  .option("--remove-scripts", "Remove script tags from HTML output")
+  .option("--remove-styles", "Remove style tags from HTML output")
+  .option("--remove-comments", "Remove HTML comments")
+  .option("--remove-inline-styles", "Remove inline style attributes")
+  .option("--remove-classes", "Remove class attributes")
+  .option("--remove-data-attributes", "Remove data attributes")
+  .option("--remove-event-handlers", "Remove event handlers (onclick, etc.)")
+  .option("--remove-forms", "Remove forms and form elements")
+  // Text-specific options
+  .option("--plain-text-headings", "Format headings in plain text (e.g., '# Heading')")
+  .option("--include-links", "Include URLs after link text")
   .option("--silent", "Do not print any logs")
   .option("--include-text <pattern>", "Only include pages containing specific text")
   .option("--exclude-text <pattern>", "Exclude pages containing specific text")
@@ -39,6 +61,8 @@ cli
   .option("--cache-dir <path>", "Directory to store cache files")
   .option("--cache-ttl <seconds>", "Time-to-live for cached pages in seconds (default: 3600)")
   .option("--cache-namespace <name>", "Namespace for cache files")
+  .option("--cache-compression-level <level>", "Compression level for cache (0-9, 0 = no compression, 9 = max compression)")
+  .option("--cache-max-size <bytes>", "Maximum cache size in bytes (default: unlimited)")
   .option("--extract-metadata", "Enable metadata extraction")
   .option("--no-metadata-dates", "Disable extraction of publication dates")
   .option("--no-metadata-authors", "Disable extraction of author information")
@@ -52,6 +76,9 @@ cli
   .option("--progress-update-interval <ms>", "Progress update interval in milliseconds")
   .option("--progress-bar-width <width>", "Width of the progress bar in characters")
   .option("--no-progress-bar", "Disable progress bar display")
+  .option("--progress-bar-char <char>", "Character to use for filled portion of progress bar (default: \u2588)")
+  .option("--incomplete-char <char>", "Character to use for unfilled portion of progress bar (default: \u2591)")
+  .option("--no-show-stats", "Disable detailed progress statistics")
   .option("--resume", "Enable resumable operations")
   .option("--checkpoint-dir <path>", "Directory to store checkpoint files")
   .option("--checkpoint-interval <ms>", "Interval between checkpoints in milliseconds")
@@ -59,6 +86,16 @@ cli
   .option("--resume-from <id>", "Resume from a specific checkpoint ID")
   .option("--no-compress-checkpoint", "Disable checkpoint compression")
   .option("--max-checkpoints <number>", "Maximum number of checkpoints to keep")
+  .option("--checkpoint-format <format>", "File name format for checkpoints")
+  .option("--checkpoint-compression-level <level>", "Compression level for checkpoints (0-9)")
+  // Pagination options
+  .option("--pagination", "Enable pagination detection and handling")
+  .option("--no-pagination", "Disable pagination detection and handling")
+  .option("--max-pages <number>", "Maximum number of pages to follow for each starting URL")
+  .option("--pagination-strategy <strategy>", "Pagination detection strategy (next-link, page-numbers, or auto)")
+  .option("--no-auto-detect", "Disable automatic detection of pagination elements")
+  .option("--next-link-selector <selector>", "CSS selector for 'next page' links")
+  .option("--page-numbers-selector <selector>", "CSS selector for page number links")
   // Add request configuration options
   .option("--timeout <ms>", "Request timeout in milliseconds")
   .option("--user-agent <agent>", "Custom User-Agent header")
@@ -136,12 +173,19 @@ cli
 
     // Parse cache options
     let cacheOptions = undefined
-    if (flags.cache !== undefined || flags.cacheDir || flags.cacheTtl || flags.cacheNamespace) {
+    if (flags.cache !== undefined || 
+        flags.cacheDir || 
+        flags.cacheTtl || 
+        flags.cacheNamespace ||
+        flags.cacheCompressionLevel ||
+        flags.cacheMaxSize) {
       cacheOptions = {
         enabled: flags.cache !== false, // Default to true if any cache option is specified
         directory: flags.cacheDir,
         ttl: flags.cacheTtl && parseInt(flags.cacheTtl, 10),
-        namespace: flags.cacheNamespace
+        namespace: flags.cacheNamespace,
+        compressionLevel: flags.cacheCompressionLevel && parseInt(flags.cacheCompressionLevel, 10),
+        maxSize: flags.cacheMaxSize && parseInt(flags.cacheMaxSize, 10)
       }
     }
     
@@ -171,12 +215,18 @@ cli
     if (flags.progress !== undefined || 
         flags.progressUpdateInterval || 
         flags.progressBarWidth || 
-        flags.progressBar === false) {
+        flags.progressBar === false ||
+        flags.progressBarChar ||
+        flags.incompleteChar ||
+        flags.showStats === false) {
       progressOptions = {
         enabled: flags.progress !== false, 
         updateInterval: flags.progressUpdateInterval && parseInt(flags.progressUpdateInterval, 10),
         showProgressBar: flags.progressBar !== false,
-        progressBarWidth: flags.progressBarWidth && parseInt(flags.progressBarWidth, 10)
+        progressBarWidth: flags.progressBarWidth && parseInt(flags.progressBarWidth, 10),
+        progressBarChar: flags.progressBarChar,
+        incompleteChar: flags.incompleteChar,
+        showStats: flags.showStats !== false
       }
     }
     
@@ -187,14 +237,18 @@ cli
         flags.checkpointInterval ||
         flags.checkpointId ||
         flags.compressCheckpoint === false ||
-        flags.maxCheckpoints) {
+        flags.maxCheckpoints ||
+        flags.checkpointFormat ||
+        flags.checkpointCompressionLevel) {
       resumeOptions = {
         enabled: flags.resume === true,
         checkpointDir: flags.checkpointDir,
         checkpointInterval: flags.checkpointInterval && parseInt(flags.checkpointInterval, 10),
         checkpointId: flags.checkpointId,
         compress: flags.compressCheckpoint !== false,
-        maxCheckpoints: flags.maxCheckpoints && parseInt(flags.maxCheckpoints, 10)
+        maxCheckpoints: flags.maxCheckpoints && parseInt(flags.maxCheckpoints, 10),
+        checkpointFileFormat: flags.checkpointFormat,
+        compressionLevel: flags.checkpointCompressionLevel && parseInt(flags.checkpointCompressionLevel, 10)
       }
     }
     
@@ -271,6 +325,26 @@ cli
       }
     }
 
+    // Parse pagination options
+    let paginationOptions = undefined
+    if (flags.pagination !== undefined ||
+        flags.maxPages ||
+        flags.paginationStrategy ||
+        flags.autoDetect === false ||
+        flags.nextLinkSelector ||
+        flags.pageNumbersSelector) {
+      paginationOptions = {
+        enabled: flags.pagination !== false,
+        maxPages: flags.maxPages && parseInt(flags.maxPages, 10),
+        strategy: flags.paginationStrategy,
+        autoDetect: flags.autoDetect !== false,
+        selectors: {
+          nextLink: flags.nextLinkSelector,
+          pageNumbers: flags.pageNumbersSelector
+        }
+      }
+    }
+
     // Initialize resume handler separately to capture checkpoint ID
     let resumeHandler: ResumeHandler | undefined = undefined
     if (resumeOptions?.enabled) {
@@ -290,6 +364,10 @@ cli
           adaptive: flags.adaptive !== false,
           respectRobotsTxt: flags.robots !== false,
           perHostLimits: perHostLimits,
+          maxConcurrent: flags.maxConcurrent && parseInt(flags.maxConcurrent, 10),
+          timeWindow: flags.timeWindow && parseInt(flags.timeWindow, 10),
+          defaultDelay: flags.defaultDelay && parseInt(flags.defaultDelay, 10),
+          detectRateLimits: flags.detectRateLimits !== false
         },
         filter: filterOptions,
         transform: {
@@ -297,11 +375,30 @@ cli
           prettyPrint: flags.prettyPrint === true,
           removeExcessWhitespace: flags.excessWhitespace === false,
           removeLineBreaks: flags.lineBreaks === false,
+          // Markdown-specific options
+          headingStyle: flags.headingStyle,
+          codeBlockStyle: flags.codeBlockStyle,
+          bulletListMarker: flags.bulletListMarker,
+          listItemSpacing: flags.listItemSpacing === true,
+          // HTML-specific options
+          xmlMode: flags.xmlMode === true,
+          removeScripts: flags.removeScripts === true,
+          removeStyles: flags.removeStyles === true,
+          removeComments: flags.removeComments === true,
+          removeInlineStyles: flags.removeInlineStyles === true,
+          removeClasses: flags.removeClasses === true,
+          removeDataAttributes: flags.removeDataAttributes === true,
+          removeEventHandlers: flags.removeEventHandlers === true,
+          removeForms: flags.removeForms === true,
+          // Text-specific options
+          plainTextHeadings: flags.plainTextHeadings === true,
+          includeLinks: flags.includeLinks === true,
         },
         cache: cacheOptions,
         metadata: metadataOptions,
         request: requestOptions,
         progress: progressOptions,
+        pagination: paginationOptions,
         resume: resumeOptions,
         errors: errorOptions
       },
@@ -342,6 +439,24 @@ cli
           prettyPrint: flags.prettyPrint === true,
           removeExcessWhitespace: flags.excessWhitespace === false, 
           removeLineBreaks: flags.lineBreaks === false,
+          // Markdown-specific options
+          headingStyle: flags.headingStyle,
+          codeBlockStyle: flags.codeBlockStyle,
+          bulletListMarker: flags.bulletListMarker,
+          listItemSpacing: flags.listItemSpacing === true,
+          // HTML-specific options
+          xmlMode: flags.xmlMode === true,
+          removeScripts: flags.removeScripts === true,
+          removeStyles: flags.removeStyles === true,
+          removeComments: flags.removeComments === true,
+          removeInlineStyles: flags.removeInlineStyles === true,
+          removeClasses: flags.removeClasses === true,
+          removeDataAttributes: flags.removeDataAttributes === true,
+          removeEventHandlers: flags.removeEventHandlers === true,
+          removeForms: flags.removeForms === true,
+          // Text-specific options
+          plainTextHeadings: flags.plainTextHeadings === true,
+          includeLinks: flags.includeLinks === true,
         }
       )
       fs.mkdirSync(path.dirname(flags.outfile), { recursive: true })
@@ -357,6 +472,24 @@ cli
           prettyPrint: flags.prettyPrint === true,
           removeExcessWhitespace: flags.excessWhitespace === false, 
           removeLineBreaks: flags.lineBreaks === false,
+          // Markdown-specific options
+          headingStyle: flags.headingStyle,
+          codeBlockStyle: flags.codeBlockStyle,
+          bulletListMarker: flags.bulletListMarker,
+          listItemSpacing: flags.listItemSpacing === true,
+          // HTML-specific options
+          xmlMode: flags.xmlMode === true,
+          removeScripts: flags.removeScripts === true,
+          removeStyles: flags.removeStyles === true,
+          removeComments: flags.removeComments === true,
+          removeInlineStyles: flags.removeInlineStyles === true,
+          removeClasses: flags.removeClasses === true,
+          removeDataAttributes: flags.removeDataAttributes === true,
+          removeEventHandlers: flags.removeEventHandlers === true,
+          removeForms: flags.removeForms === true,
+          // Text-specific options
+          plainTextHeadings: flags.plainTextHeadings === true,
+          includeLinks: flags.includeLinks === true,
         }
       ))
     }
