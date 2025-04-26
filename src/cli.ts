@@ -568,10 +568,35 @@ cli
 
     const pagesArr = [...pages.values()]
 
-    const totalTokenCount = pagesArr.reduce(
-      (acc, page) => acc + encode(page.content).length,
-      0
+    // Define the special tokens used by gpt-4o that might appear literally
+    // Add others if needed, e.g., <|im_start|>, <|im_end|> if they cause issues
+    const specialTokens = [
+      "<|endoftext|>",
+      "<|fim_prefix|>",
+      "<|fim_middle|>",
+      "<|fim_suffix|>",
+      "<|endofprompt|>",
+    ]
+    // Create a regex to match any of these tokens globally
+    // Escape special characters in the tokens for regex usage
+    const escapedTokens = specialTokens.map(
+      (token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") // Escape regex special chars
     )
+    const specialTokenRegex = new RegExp(escapedTokens.join("|"), "g")
+
+    const totalTokenCount = pagesArr.reduce((acc, page) => {
+      try {
+        // Remove the special tokens before encoding
+        const cleanedContent = page.content.replace(specialTokenRegex, "") // Replace with empty string
+        return acc + encode(cleanedContent).length
+      } catch (e) {
+        // Should not happen with cleaning, but good practice
+        logger.warn(
+          `Could not encode content for page ${page.url}: ${e.message}`
+        )
+        return acc // Add 0 for this page if encoding still fails
+      }
+    }, 0)
 
     logger.info(
       `Total token count for ${pages.size} pages: ${formatNumber(
