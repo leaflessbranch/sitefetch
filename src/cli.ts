@@ -47,6 +47,11 @@ cli
   .option("--no-metadata-twitter", "Disable extraction of Twitter card metadata")
   .option("--extract-json-ld", "Enable extraction of JSON-LD structured data")
   .option("--extract-microdata", "Enable extraction of microdata from HTML attributes")
+  .option("--progress", "Enable progress tracking and display")
+  .option("--no-progress", "Disable progress tracking and display")
+  .option("--progress-update-interval <ms>", "Progress update interval in milliseconds")
+  .option("--progress-bar-width <width>", "Width of the progress bar in characters")
+  .option("--no-progress-bar", "Disable progress bar display")
   .action(async (url, flags) => {
     if (!url) {
       cli.outputHelp()
@@ -138,6 +143,20 @@ cli
       }
     }
     
+    // Parse progress options
+    let progressOptions = undefined
+    if (flags.progress !== undefined || 
+        flags.progressUpdateInterval || 
+        flags.progressBarWidth || 
+        flags.progressBar === false) {
+      progressOptions = {
+        enabled: flags.progress !== false, 
+        updateInterval: flags.progressUpdateInterval && parseInt(flags.progressUpdateInterval, 10),
+        showProgressBar: flags.progressBar !== false,
+        progressBarWidth: flags.progressBarWidth && parseInt(flags.progressBarWidth, 10)
+      }
+    }
+    
     // Parse request configuration options
     let requestOptions = undefined
     if (flags.timeout || 
@@ -223,6 +242,7 @@ cli
       cache: cacheOptions,
       metadata: metadataOptions,
       request: requestOptions,
+      progress: progressOptions
     })
 
     if (pages.size === 0) {

@@ -1,3 +1,5 @@
+// Re-export progress tracking classes
+export { ProgressTracker, createProgressTracker } from './progress'
 // Re-export public API from fetcher module
 export { fetchSite, serializePages, Fetcher } from './fetcher'
 

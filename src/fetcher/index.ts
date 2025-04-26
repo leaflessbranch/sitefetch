@@ -15,6 +15,7 @@ import { MetadataExtractor } from '../metadata'
 import { handleError, TransformError } from '../errors'
 import { RequestManager } from './request-manager'
 import { TransformerFactory, serializePages as transformSerializePages } from '../transforms'
+import { ProgressTracker, ProgressEvent } from '../progress'
 import type { Options, FetchSiteResult, Page, TransformOptions } from '../types'
 
 /**
@@ -30,6 +31,7 @@ export class Fetcher {
   #cache: Cache
   #metadataExtractor: MetadataExtractor
   #requestManager: RequestManager
+  #progressTracker: ProgressTracker
   
   /**
    * Creates a new Fetcher instance
@@ -57,6 +59,41 @@ export class Fetcher {
     
     // Initialize request manager
     this.#requestManager = new RequestManager(options.request)
+    
+    // Initialize progress tracker
+    this.#progressTracker = new ProgressTracker(options.progress)
+    
+    // Set up progress event handlers
+    this.#setupProgressEvents()
+  }
+  
+  /**
+   * Sets up progress event handlers
+   * 
+   * @private
+   */
+  #setupProgressEvents(): void {
+    // If progress tracking is disabled, do nothing
+    if (this.options.progress?.enabled === false) {
+      return
+    }
+    
+    // Forward progress events to the user if they've set up listeners
+    if (typeof this.options.progress?.onProgress === 'function') {
+      this.#progressTracker.on(ProgressEvent.PROGRESS, this.options.progress.onProgress)
+    }
+    
+    if (typeof this.options.progress?.onPageFetched === 'function') {
+      this.#progressTracker.on(ProgressEvent.PAGE_FETCHED, this.options.progress.onPageFetched)
+    }
+    
+    if (typeof this.options.progress?.onPageFailed === 'function') {
+      this.#progressTracker.on(ProgressEvent.PAGE_FAILED, this.options.progress.onPageFailed)
+    }
+    
+    if (typeof this.options.progress?.onComplete === 'function') {
+      this.#progressTracker.on(ProgressEvent.COMPLETE, this.options.progress.onComplete)
+    }
   }
   
   /**
@@ -86,7 +123,7 @@ export class Fetcher {
   #limitReached() {
     return this.options.limit && this.#pages.size >= this.options.limit
   }
-  
+
   /**
    * Gets the content selector for a pathname
    * 
@@ -118,11 +155,17 @@ export class Fetcher {
     // Initialize robots.txt parsing for the target host
     await this.#initRobotsForHost(startUrl.hostname)
     
+    // Start progress tracking
+    this.#progressTracker.start(this.options.limit || 100) // Initial estimate
+    
     await this.#fetchPage(url, {
       skipMatch: true,
     })
     
     await this.#queue.onIdle()
+    
+    // Complete progress tracking
+    this.#progressTracker.complete()
     
     logger.info(
       `Completed fetching ${c.green(url)}. Fetched ${this.#pages.size} pages.`
@@ -158,6 +201,7 @@ export class Fetcher {
       this.options.match &&
       !matchPath(pathname, this.options.match)
     ) {
+      this.#progressTracker.pageSkipped(url, 'Does not match pattern')
       return
     }
     
@@ -170,6 +214,9 @@ export class Fetcher {
           
           // Store the cached page in our results
           this.#pages.set(pathname, cachedPage)
+          
+          // Report cache hit to progress tracker
+          this.#progressTracker.pageFetched(url, cachedPage, 0)
           
           // Process links from the cached page if we need to crawl further
           if (options.skipMatch) {
@@ -222,6 +269,11 @@ export class Fetcher {
     
     logger.info(`Fetching ${c.green(url)}`)
     
+    // Notify progress tracker that we're starting to fetch
+    this.#progressTracker.pageFetching(url)
+    
+    const fetchStartTime = Date.now()
+    
     try {
       // Use rate limiter to schedule the fetch
       const res = await this.#rateLimiter.schedule(async () => {
@@ -249,10 +301,12 @@ export class Fetcher {
       
       if (!res.ok) {
         logger.warn(`Failed to fetch ${url}: ${res.statusText}`)
+        this.#progressTracker.pageFailed(url, new Error(`HTTP ${res.status}: ${res.statusText}`))
         return
       }
       
       if (this.#limitReached()) {
+        this.#progressTracker.pageSkipped(url, 'Limit reached')
         return
       }
       
@@ -260,6 +314,7 @@ export class Fetcher {
       
       if (!contentType?.includes('text/html')) {
         logger.warn(`Not a HTML page: ${url}`)
+        this.#progressTracker.pageSkipped(url, 'Not HTML content')
         return
       }
       
@@ -268,6 +323,7 @@ export class Fetcher {
       // redirected to other site, ignore
       if (resUrl.host !== host) {
         logger.warn(`Redirected from ${host} to ${resUrl.host}`)
+        this.#progressTracker.pageSkipped(url, `Redirected to different host: ${resUrl.host}`)
         return
       }
       
@@ -335,6 +391,7 @@ export class Fetcher {
       
       if (!html) {
         logger.warn(`No readable content on ${pathname}`)
+        this.#progressTracker.pageFailed(url, new Error('No readable content found'))
         return
       }
       
@@ -347,6 +404,7 @@ export class Fetcher {
       await window.happyDOM.close()
       
       if (!article) {
+        this.#progressTracker.pageFailed(url, new Error('Failed to parse content with Readability'))
         return
       }
       
@@ -423,25 +481,33 @@ export class Fetcher {
         includePage = await this.#contentFilter.shouldInclude(page)
         if (!includePage) {
           logger.info(`Filtered out page: ${pathname}`)
+          this.#progressTracker.pageSkipped(url, 'Filtered out by content filters')
+          return
         }
       }
       
-      if (includePage) {
-        // Store the page in our results
-        this.#pages.set(pathname, page)
-        
-        // Store in cache if enabled
-        if (this.options.cache?.enabled) {
-          try {
-            await this.#cache.set(url, page)
-          } catch (error) {
-            logger.warn(`Failed to cache page ${url}: ${error.message}`)
-          }
+      // Store the page in our results
+      this.#pages.set(pathname, page)
+      
+      // Store in cache if enabled
+      if (this.options.cache?.enabled) {
+        try {
+          await this.#cache.set(url, page)
+        } catch (error) {
+          logger.warn(`Failed to cache page ${url}: ${error.message}`)
         }
       }
+      
+      // Calculate time taken to fetch and process
+      const fetchEndTime = Date.now()
+      const timeTaken = fetchEndTime - fetchStartTime
+      
+      // Report successful fetch to progress tracker
+      this.#progressTracker.pageFetched(url, page, timeTaken)
       
     } catch (error) {
       logger.error(`Error fetching ${url}: ${error.message}`)
+      this.#progressTracker.pageFailed(url, error)
     }
   }
   
@@ -458,7 +524,8 @@ export class Fetcher {
       pendingCount: this.#queue.pending,
       rateLimiterStats: this.#rateLimiter.getStats(),
       robotsTxtCacheSize: RobotsParser.getCacheSize(),
-      cacheStats: this.options.cache?.enabled ? this.#cache.getStats() : null
+      cacheStats: this.options.cache?.enabled ? this.#cache.getStats() : null,
+      progressStats: this.#progressTracker.getStats()
     }
   }
   
@@ -550,6 +617,15 @@ export class Fetcher {
    */
   updateRequestOptions(options: Partial<import('../types').RequestOptions>): void {
     this.#requestManager.updateOptions(options)
+  }
+  
+  /**
+   * Gets the progress tracker instance
+   * 
+   * @returns The progress tracker
+   */
+  getProgressTracker(): ProgressTracker {
+    return this.#progressTracker
   }
   
   /**

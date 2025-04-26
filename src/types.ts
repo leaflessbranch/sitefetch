@@ -1,4 +1,87 @@
 /**
+ * Options for progress tracking
+ */
+export interface ProgressOptions {
+  /** Enable progress tracking */
+  enabled?: boolean
+  /** Update interval in milliseconds */
+  updateInterval?: number
+  /** Show progress bar in CLI */
+  showProgressBar?: boolean
+  /** Width of the progress bar in characters */
+  progressBarWidth?: number
+  /** Progress bar character for completed segments */
+  progressBarChar?: string
+  /** Progress bar character for incomplete segments */
+  incompleteChar?: string
+  /** Show detailed statistics */
+  showStats?: boolean
+  /** Callback for progress events */
+  onProgress?: (stats: ProgressStats) => void
+  /** Callback for page fetched events */
+  onPageFetched?: (data: PageEventData) => void
+  /** Callback for page failed events */
+  onPageFailed?: (data: PageEventData) => void
+  /** Callback for page skipped events */
+  onPageSkipped?: (data: PageEventData) => void
+  /** Callback for completion */
+  onComplete?: (stats: ProgressStats) => void
+}
+
+/**
+ * Events for progress tracking
+ */
+export enum ProgressEvent {
+  START = 'start',
+  PAGE_FETCHED = 'page-fetched',
+  PAGE_FAILED = 'page-failed',
+  PAGE_SKIPPED = 'page-skipped',
+  PROGRESS = 'progress',
+  COMPLETE = 'complete',
+  ERROR = 'error',
+}
+
+/**
+ * Progress statistics data
+ */
+export interface ProgressStats {
+  /** Total pages to process */
+  total: number
+  /** Pages successfully processed */
+  completed: number
+  /** Pages that failed */
+  failed: number
+  /** Pages skipped due to filtering */
+  skipped: number
+  /** Pages currently being processed */
+  inProgress: number
+  /** Elapsed time in milliseconds */
+  elapsedTimeMs: number
+  /** Pages per second */
+  pagesPerSecond: number
+  /** Estimated time remaining in milliseconds */
+  estimatedTimeRemainingMs?: number
+  /** Percentage complete (0-100) */
+  percentComplete: number
+}
+
+/**
+ * Event data for page events
+ */
+export interface PageEventData {
+  /** URL of the page */
+  url: string
+  /** Page object (for successful fetches) */
+  page?: Page
+  /** Error object (for failed fetches) */
+  error?: Error
+  /** Time taken to fetch the page in milliseconds */
+  timeMs?: number
+  /** Timestamp of the event */
+  timestamp: number
+}
+
+/**
  * Options for caching fetched content
  */
 export interface CacheOptions {
@@ -92,6 +175,11 @@ export type Options = {
    * Metadata extraction options
    */
   metadata?: MetadataOptions
+  
+  /**
+   * Progress reporting options
+   */
+  progress?: ProgressOptions
 }
 
 /**

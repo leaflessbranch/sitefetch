@@ -193,6 +193,34 @@ Supported output formats:
 - `xml`: XML format with proper escaping
 - `csv`: CSV format with basic fields
 
+### Progress Tracking
+
+SiteFetch provides real-time progress tracking to monitor the status of your fetching operations:
+
+```bash
+# Enable progress tracking with default settings
+sitefetch https://example.com -o site.txt --progress
+
+# Disable progress display
+sitefetch https://example.com -o site.txt --no-progress
+
+# Customize progress update frequency (in milliseconds)
+sitefetch https://example.com -o site.txt --progress-update-interval 2000
+
+# Adjust progress bar width
+sitefetch https://example.com -o site.txt --progress-bar-width 50
+
+# Disable progress bar but keep statistical updates
+sitefetch https://example.com -o site.txt --no-progress-bar
+```
+
+The progress tracking system provides:
+
+1. Real-time visualization with customizable CLI progress bar
+2. Detailed statistics on success rate, pages per second, and estimated time remaining
+3. Events for tracking fetch successes, failures, and skipped pages
+4. Programmatic access to progress data through the API
+
 ## Plug
 
 If you like this, please check out my LLM chat app: https://chatwise.app
@@ -204,6 +232,31 @@ import { fetchSite } from "sitefetch"
 
 await fetchSite("https://egoist.dev", {
   //...options
+})
+```
+
+For programmatic access to progress events, you can use the API with progress callbacks:
+
+```ts
+import { fetchSite } from "sitefetch"
+
+await fetchSite("https://egoist.dev", {
+  // Enable progress tracking
+  progress: {
+    enabled: true,
+    // Callback for overall progress updates
+    onProgress: (stats) => {
+      console.log(`Progress: ${stats.percentComplete}%, Speed: ${stats.pagesPerSecond} p/s`)
+    },
+    // Callback for successful page fetches
+    onPageFetched: (data) => {
+      console.log(`Fetched: ${data.url} in ${data.timeMs}ms`)
+    },
+    // Callback for failed page fetches
+    onPageFailed: (data) => {
+      console.log(`Failed: ${data.url} - ${data.error.message}`)
+    }
+  }
 })
 ```
 
