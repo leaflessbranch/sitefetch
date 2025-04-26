@@ -4,4 +4,3 @@ foo.txt
 .DS_Store
 dist/
 .sitefetch-cache/
-package-lock.json
