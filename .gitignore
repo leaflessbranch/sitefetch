@@ -3,3 +3,5 @@ foo.txt
 *.log
 .DS_Store
 dist/
+.sitefetch-cache/
+package-lock.json
